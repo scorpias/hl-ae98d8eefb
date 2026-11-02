@@ -217,7 +217,8 @@ input[type=date]::-webkit-date-and-time-value, input[type=time]::-webkit-date-an
 
   /* Each change between two readings in time order: a fall is battery used, a rise is charging. */
   function analyse() {
-    var all = sorted(), used = 0, charged = 0, perDay = {}, drops = [], gaps = [];
+    /* A reading of 0% is treated as not recorded: it would otherwise show up as a huge drop and a huge charge. */
+    var all = sorted().filter(function (e) { return e.soc > 0; }), used = 0, charged = 0, perDay = {}, drops = [], gaps = [];
     for (var i = 1; i < all.length; i++) {
       var a = all[i - 1], b = all[i];
       /* Arrive Home followed by Leave Home means the car was parked, so nothing can be missing. */
@@ -230,7 +231,7 @@ input[type=date]::-webkit-date-and-time-value, input[type=time]::-webkit-date-an
   }
 
   function odoStats(r) {
-    var o = r.all.filter(function (e) { return e.odo > 0; });
+    var o = sorted().filter(function (e) { return e.odo > 0; });
     if (o.length < 2) return "";
     var f = o[0], l = o[o.length - 1], km = l.odo - f.odo;
     if (!(km > 0)) return "";
@@ -319,7 +320,7 @@ input[type=date]::-webkit-date-and-time-value, input[type=time]::-webkit-date-an
     entries.forEach(function (e) { (byDay[e.date] = byDay[e.date] || []).push(e); });
     var html = "";
     Object.keys(byDay).sort().reverse().forEach(function (d) {
-      var list = byDay[d].sort(function (a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+      var list = byDay[d].sort(function (a, b) { return a.time < b.time ? 1 : a.time > b.time ? -1 : 0; }); // newest first, like the days
       var dt = new Date(d + "T12:00:00");
       var wk = dt.getDay() === 0 || dt.getDay() === 6;
       var wd = dt.toLocaleDateString("en-ZA", { weekday: "long" });
@@ -329,7 +330,7 @@ input[type=date]::-webkit-date-and-time-value, input[type=time]::-webkit-date-an
       if (pd && pd.charged > 0) sub += (sub ? " · " : "") + "charged " + fmt(pd.charged, 0) + "%";
       html += '<div class="day' + (wk ? " weekend" : "") + '"><h3><span><span class="dn">' + wd + '</span> ' + dm + '</span><small>' + sub + '</small></h3>';
       list.forEach(function (e) {
-        html += '<div class="ev"><span class="t">' + e.time + '</span><span class="n">' + NAMES[e.type] + (e.note ? '<small>' + esc(e.note) + '</small>' : '') + (e.odo > 0 ? '<small>' + fmt(e.odo, 0) + ' km</small>' : '') + '</span><span class="k">' + fmt(e.soc, 0) + '%</span>' +
+        html += '<div class="ev"><span class="t">' + e.time + '</span><span class="n">' + NAMES[e.type] + (e.note ? '<small>' + esc(e.note) + '</small>' : '') + (e.odo > 0 ? '<small>' + fmt(e.odo, 0) + ' km</small>' : '') + '</span><span class="k">' + (e.soc > 0 ? fmt(e.soc, 0) + '%' : '0% ignored') + '</span>' +
           '<button type="button" class="del' + (confirmId === e.id ? " confirm" : "") + '" data-del="' + e.id + '" aria-label="Delete entry">' +
           (confirmId === e.id ? "Delete?" : "✕") + "</button></div>";
       });
@@ -376,7 +377,7 @@ input[type=date]::-webkit-date-and-time-value, input[type=time]::-webkit-date-an
     ev.preventDefault();
     if (!selected) { say("Pick where you are first.", true); return; }
     var s = num($("soc").value);
-    if (!(s >= 0 && s <= 100)) { say("Type a battery percentage from 0 to 100.", true); return; }
+    if (!(s > 0 && s <= 100)) { say("Type a battery percentage from 1 to 100.", true); return; }
     if (!store) { say("Still loading, try again in a moment.", true); return; }
     stamp();
     var e = { date: $("date").value, time: $("time").value, type: selected, soc: s };
@@ -437,18 +438,20 @@ input[type=date]::-webkit-date-and-time-value, input[type=time]::-webkit-date-an
       try {
         var d = JSON.parse(r.result), list = Array.isArray(d) ? d : d.entries;
         if (!Array.isArray(list)) throw new Error("no entries");
-        var seen = {}; entries.forEach(function (e) { seen[entryKey(e)] = 1; });
-        var added = 0, stamp0 = Date.now();
+        var seen = {}; entries.forEach(function (e) { seen[entryKey(e)] = e; });
+        var added = 0, updated = 0, stamp0 = Date.now();
         list.forEach(function (x) {
           if (!x || !/^\d{4}-\d{2}-\d{2}$/.test(x.date) || !/^\d{2}:\d{2}$/.test(x.time) || !NAMES[x.type]) return;
           var e = {}; Object.keys(x).forEach(function (k) { if (k !== "id" && k !== "created") e[k] = x[k]; });
           if (e.kwh != null) e.kwh = Number(e.kwh); if (e.soc != null) e.soc = Number(e.soc);
           if (!(e.kwh > 0 || e.soc >= 0)) return;
-          if (seen[entryKey(e)]) return; seen[entryKey(e)] = 1;
+          var ex = seen[entryKey(e)];
+          if (ex) { if (e.odo != null && ex.odo !== e.odo) { ex.odo = e.odo; updated++; } return; }
+          seen[entryKey(e)] = e;
           e.id = "i" + stamp0 + "_" + added; entries.push(e); added++;
         });
         lsSet(LS_ENTRIES, JSON.stringify(entries)); renderAll();
-        bkSay(added + " entries added" + (list.length - added ? ", " + (list.length - added) + " skipped (already here or not valid)." : "."));
+        bkSay(added + " entries added" + (updated ? ", " + updated + " odometer value" + (updated > 1 ? "s" : "") + " corrected" : "") + (list.length - added - updated ? ", " + (list.length - added - updated) + " skipped (already here or not valid)." : "."));
       } catch (err) { bkSay("That file is not a backup from this app.", true); }
       $("importFile").value = "";
     };
