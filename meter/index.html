@@ -315,7 +315,7 @@ input[type=date]::-webkit-date-and-time-value, input[type=time]::-webkit-date-an
     var days = Object.keys(byDay).sort().reverse();
     var html = "";
     days.forEach(function (d) {
-      var list = byDay[d].sort(function (a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+      var list = byDay[d].sort(function (a, b) { return a.time < b.time ? 1 : a.time > b.time ? -1 : 0; }); // newest first, like the days
       var dt = new Date(d + "T12:00:00");
       var wk = dt.getDay() === 0 || dt.getDay() === 6;
       var wd = dt.toLocaleDateString("en-ZA", { weekday: "long" });
